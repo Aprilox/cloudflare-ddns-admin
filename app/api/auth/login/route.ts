@@ -23,10 +23,13 @@ export async function POST(req: Request) {
     }
     
     // Définir le cookie d'authentification
+    // En production sans HTTPS (réseau local), secure doit être false
+    const isSecure = process.env.SECURE_COOKIE === 'true'
+    
     const cookieStore = await cookies()
     cookieStore.set('auth-token', result.token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isSecure,
       sameSite: 'lax',
       maxAge: parseInt(process.env.JWT_EXPIRATION || '86400'),
       path: '/'

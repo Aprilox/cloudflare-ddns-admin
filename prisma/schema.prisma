@@ -65,8 +65,10 @@ model LogSettings {
 // État du worker DDNS
 // ==========================================
 model WorkerState {
-  id        Int     @id @default(1)
-  isRunning Boolean @default(false)
+  id          Int      @id @default(1)
+  isRunning   Boolean  @default(false)
+  lastCheckAt DateTime @default(now())
+  processId   String?
 }
 
 // ==========================================

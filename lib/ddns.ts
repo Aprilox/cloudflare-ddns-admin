@@ -5,10 +5,13 @@ import { DDNSConfig } from '@prisma/client'
 // ÉTAT LOCAL (pour le worker actif dans ce process)
 // =============================================
 let workerInterval: NodeJS.Timeout | null = null
-let checkInProgress = false
 let verifyInProgress = false
 let currentConfig: DDNSConfig | null = null
 let pendingVerification: { ip: string; count: number; oldIp: string } | null = null
+
+// ID unique pour ce processus (évite les doublons entre hot reloads)
+const PROCESS_ID = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+const MIN_CHECK_INTERVAL_MS = 10000 // Minimum 10 secondes entre les checks
 
 // APIs pour vérifier l'IP (IPv4 uniquement)
 const APIS = [
@@ -28,24 +31,58 @@ export interface IpConsensusResult { consensusIp: string | null; confidence: num
 // =============================================
 // ÉTAT PERSISTANT (dans la DB)
 // =============================================
-async function getWorkerState(): Promise<boolean> {
+async function getWorkerState(): Promise<{ isRunning: boolean; processId: string | null; lastCheckAt: Date }> {
   try {
     const state = await prisma.workerState.findFirst({ where: { id: 1 } })
-    return state?.isRunning ?? false
+    return {
+      isRunning: state?.isRunning ?? false,
+      processId: state?.processId ?? null,
+      lastCheckAt: state?.lastCheckAt ?? new Date(0)
+    }
   } catch {
-    return false
+    return { isRunning: false, processId: null, lastCheckAt: new Date(0) }
   }
 }
 
-async function setWorkerState(running: boolean): Promise<void> {
+async function setWorkerState(running: boolean, updateProcessId = false): Promise<void> {
   try {
     await prisma.workerState.upsert({
       where: { id: 1 },
-      update: { isRunning: running },
-      create: { id: 1, isRunning: running }
+      update: { 
+        isRunning: running,
+        ...(updateProcessId ? { processId: running ? PROCESS_ID : null } : {})
+      },
+      create: { id: 1, isRunning: running, processId: running ? PROCESS_ID : null }
     })
   } catch (e) {
     console.error('[DDNS] Erreur sauvegarde état:', e)
+  }
+}
+
+// Tenter d'acquérir le verrou pour un check (retourne true si ok)
+async function tryAcquireCheckLock(): Promise<boolean> {
+  try {
+    const state = await prisma.workerState.findFirst({ where: { id: 1 } })
+    if (!state) return true // Pas d'état = OK
+    
+    const now = Date.now()
+    const lastCheck = state.lastCheckAt.getTime()
+    
+    // Si le dernier check est trop récent, refuser
+    if (now - lastCheck < MIN_CHECK_INTERVAL_MS) {
+      console.log(`[DDNS] Check ignoré (dernier il y a ${now - lastCheck}ms)`)
+      return false
+    }
+    
+    // Mettre à jour le timestamp du dernier check
+    await prisma.workerState.update({
+      where: { id: 1 },
+      data: { lastCheckAt: new Date() }
+    })
+    
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -189,8 +226,9 @@ function scheduleNextVerification(config: DDNSConfig) {
   const { ip, count, oldIp } = pendingVerification
   
   setTimeout(async () => {
-    const isRunning = await getWorkerState()
-    if (!isRunning || !pendingVerification) {
+    const state = await getWorkerState()
+    // Vérifier que le worker est actif ET que c'est notre processus
+    if (!state.isRunning || state.processId !== PROCESS_ID || !pendingVerification) {
       verifyInProgress = false
       pendingVerification = null
       return
@@ -228,25 +266,19 @@ function scheduleNextVerification(config: DDNSConfig) {
 // =============================================
 // CHECK IP PRINCIPAL
 // =============================================
-let lastCheckTime = 0
-
 async function checkIP() {
-  // Protection contre les checks trop rapprochés (minimum 5 secondes entre chaque)
-  const now = Date.now()
-  if (now - lastCheckTime < 5000) {
-    console.log('[DDNS] Check ignoré (trop rapproché)')
+  // Vérifier l'état du worker
+  const state = await getWorkerState()
+  if (!state.isRunning || !currentConfig) return
+  if (verifyInProgress) {
+    console.log('[DDNS] Check ignoré (vérification en cours)')
     return
   }
   
-  const isRunning = await getWorkerState()
-  if (!isRunning || !currentConfig) return
-  if (checkInProgress || verifyInProgress) {
-    console.log('[DDNS] Check ignoré (déjà en cours)')
-    return
-  }
+  // Tenter d'acquérir le verrou (évite les doubles checks)
+  const canCheck = await tryAcquireCheckLock()
+  if (!canCheck) return
   
-  lastCheckTime = now
-  checkInProgress = true
   const config = currentConfig
   
   try {
@@ -274,8 +306,6 @@ async function checkIP() {
     }
   } catch (e) {
     await log('CHECK_ERROR', e instanceof Error ? e.message : 'Error')
-  } finally {
-    checkInProgress = false
   }
 }
 
@@ -283,8 +313,8 @@ async function checkIP() {
 // WORKER CONTROL
 // =============================================
 export async function startWorker(config: DDNSConfig) {
-  const isRunning = await getWorkerState()
-  if (isRunning && workerInterval) {
+  const state = await getWorkerState()
+  if (state.isRunning && workerInterval) {
     console.log('[DDNS] Worker déjà actif')
     return
   }
@@ -295,26 +325,27 @@ export async function startWorker(config: DDNSConfig) {
     workerInterval = null
   }
   
-  // Marquer comme actif dans la DB
-  await setWorkerState(true)
+  // Marquer comme actif dans la DB avec notre processId
+  await setWorkerState(true, true)
   currentConfig = config
-  checkInProgress = false
   verifyInProgress = false
   pendingVerification = null
   
-  await log('WORKER_START', `Intervalle: ${config.checkInterval}s`)
-  console.log(`[DDNS] Worker démarré (check toutes les ${config.checkInterval}s)`)
+  await log('WORKER_START', `Intervalle: ${config.checkInterval}s (${PROCESS_ID.slice(0, 8)})`)
+  console.log(`[DDNS] Worker démarré (check toutes les ${config.checkInterval}s) - Process ${PROCESS_ID.slice(0, 8)}`)
   
   // Premier check immédiat
   await checkIP()
   
   // Planifier les checks suivants
   workerInterval = setInterval(async () => {
-    const stillRunning = await getWorkerState()
-    if (stillRunning) {
+    const currentState = await getWorkerState()
+    // Vérifier que c'est bien notre processus qui est actif
+    if (currentState.isRunning && currentState.processId === PROCESS_ID) {
       await checkIP()
     } else {
-      // Worker arrêté depuis ailleurs
+      // Un autre processus a pris le relais ou worker arrêté
+      console.log(`[DDNS] Worker ${PROCESS_ID.slice(0, 8)} se désactive (processId actif: ${currentState.processId?.slice(0, 8) || 'aucun'})`)
       if (workerInterval) {
         clearInterval(workerInterval)
         workerInterval = null
@@ -324,14 +355,14 @@ export async function startWorker(config: DDNSConfig) {
 }
 
 export async function stopWorker() {
-  const isRunning = await getWorkerState()
-  if (!isRunning) {
+  const state = await getWorkerState()
+  if (!state.isRunning) {
     console.log('[DDNS] Worker déjà arrêté')
     return
   }
   
   // Marquer comme arrêté dans la DB
-  await setWorkerState(false)
+  await setWorkerState(false, true)
   currentConfig = null
   
   // Nettoyer l'intervalle
@@ -340,7 +371,6 @@ export async function stopWorker() {
     workerInterval = null
   }
   
-  checkInProgress = false
   verifyInProgress = false
   pendingVerification = null
   
@@ -349,7 +379,8 @@ export async function stopWorker() {
 }
 
 export async function isWorkerRunning(): Promise<boolean> {
-  return await getWorkerState()
+  const state = await getWorkerState()
+  return state.isRunning
 }
 
 export async function getConfig(): Promise<DDNSConfig> {
@@ -371,34 +402,47 @@ export async function initializeWorker() {
     return
   }
   
-  const isRunning = await getWorkerState()
+  const state = await getWorkerState()
   
-  // Si marqué comme actif dans la DB, s'assurer que l'intervalle tourne
-  if (isRunning) {
-    if (!workerInterval) {
-      console.log('[DDNS] Worker actif en DB mais pas d\'intervalle local, relance...')
-      currentConfig = config
-      checkInProgress = false
-      verifyInProgress = false
-      
-      // Check immédiat
-      await checkIP()
-      
-      // Puis intervalle
-      workerInterval = setInterval(async () => {
-        const stillRunning = await getWorkerState()
-        if (stillRunning) {
-          await checkIP()
-        } else {
-          if (workerInterval) {
-            clearInterval(workerInterval)
-            workerInterval = null
-          }
-        }
-      }, config.checkInterval * 1000)
-      
-      console.log(`[DDNS] Intervalle relancé (${config.checkInterval}s)`)
+  // Si marqué comme actif dans la DB
+  if (state.isRunning) {
+    // Si c'est déjà notre processus avec un intervalle, rien à faire
+    if (state.processId === PROCESS_ID && workerInterval) {
+      console.log('[DDNS] Worker déjà actif dans ce processus')
+      return
     }
+    
+    // Si un autre processus est actif, on ne fait rien (il gère)
+    if (state.processId && state.processId !== PROCESS_ID) {
+      console.log(`[DDNS] Worker actif dans un autre processus (${state.processId.slice(0, 8)})`)
+      return
+    }
+    
+    // Sinon, reprendre le worker (hot reload ou crash précédent)
+    console.log('[DDNS] Reprise du worker après hot reload...')
+    currentConfig = config
+    verifyInProgress = false
+    
+    // Mettre à jour le processId pour ce processus
+    await setWorkerState(true, true)
+    
+    // Check si assez de temps s'est écoulé
+    await checkIP()
+    
+    // Puis intervalle
+    workerInterval = setInterval(async () => {
+      const currentState = await getWorkerState()
+      if (currentState.isRunning && currentState.processId === PROCESS_ID) {
+        await checkIP()
+      } else {
+        if (workerInterval) {
+          clearInterval(workerInterval)
+          workerInterval = null
+        }
+      }
+    }, config.checkInterval * 1000)
+    
+    console.log(`[DDNS] Intervalle relancé (${config.checkInterval}s) - Process ${PROCESS_ID.slice(0, 8)}`)
     return
   }
   
