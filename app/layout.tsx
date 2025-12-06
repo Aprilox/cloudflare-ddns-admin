@@ -8,6 +8,9 @@ const inter = Inter({ subsets: ['latin'] })
 export const metadata = {
   title: 'DDNS Admin Dashboard',
   description: 'Cloudflare DDNS Administration Panel',
+  icons: {
+    icon: '/favicon.svg',
+  },
 }
 
 export default function RootLayout({
