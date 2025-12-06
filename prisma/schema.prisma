@@ -1,0 +1,92 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==========================================
+// Configuration de la base de données
+// ==========================================
+// Par défaut: SQLite pour le développement
+// Pour PostgreSQL/MySQL: voir README.md pour les instructions
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// Logs de changement d'IP
+// ==========================================
+model IpChangeLog {
+  id             Int      @id @default(autoincrement())
+  timestamp      DateTime @default(now())
+  oldIp          String
+  newIp          String
+  changeDuration Int
+}
+
+// ==========================================
+// Logs d'actions du système
+// ==========================================
+model ActionLog {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  action    String
+  details   String
+}
+
+// ==========================================
+// Configuration DDNS Cloudflare
+// ==========================================
+model DDNSConfig {
+  id                Int     @id @default(autoincrement())
+  cloudflareToken   String
+  zoneId            String
+  recordName        String
+  ttl               Int
+  proxy             Boolean
+  checkInterval     Int
+  verificationCount Int     @default(3)
+  verificationDelay Int     @default(10)
+}
+
+// ==========================================
+// Paramètres de rétention des logs
+// ==========================================
+model LogSettings {
+  id                      Int @id @default(autoincrement())
+  ipChangeLogRetention    Int
+  actionLogRetention      Int
+  statisticsDataRetention Int
+}
+
+// ==========================================
+// État du worker DDNS
+// ==========================================
+model WorkerState {
+  id        Int     @id @default(1)
+  isRunning Boolean @default(false)
+}
+
+// ==========================================
+// Paramètres de notification
+// ==========================================
+model NotificationSettings {
+  id               Int     @id @default(1)
+  discord          Boolean @default(false)
+  discordWebhook   String?
+  telegram         Boolean @default(false)
+  telegramBotToken String?
+  telegramChatId   String?
+}
+
+// ==========================================
+// Paramètres généraux (clé-valeur)
+// ==========================================
+// Utilisé pour stocker le mot de passe admin (clé: "admin_password")
+model Settings {
+  id    Int     @id @default(autoincrement())
+  key   String  @unique
+  value String?
+}

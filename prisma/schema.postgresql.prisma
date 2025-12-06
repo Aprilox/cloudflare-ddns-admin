@@ -1,0 +1,65 @@
+// Schema Prisma pour PostgreSQL
+// Copiez ce fichier vers schema.prisma pour utiliser PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model IpChangeLog {
+  id             Int      @id @default(autoincrement())
+  timestamp      DateTime @default(now())
+  oldIp          String
+  newIp          String
+  changeDuration Int
+}
+
+model ActionLog {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  action    String
+  details   String
+}
+
+model DDNSConfig {
+  id                Int     @id @default(autoincrement())
+  cloudflareToken   String
+  zoneId            String
+  recordName        String
+  ttl               Int
+  proxy             Boolean
+  checkInterval     Int
+  verificationCount Int     @default(3)
+  verificationDelay Int     @default(10)
+}
+
+model LogSettings {
+  id                      Int @id @default(autoincrement())
+  ipChangeLogRetention    Int
+  actionLogRetention      Int
+  statisticsDataRetention Int
+}
+
+model WorkerState {
+  id        Int     @id @default(1)
+  isRunning Boolean @default(false)
+}
+
+model NotificationSettings {
+  id               Int     @id @default(1)
+  discord          Boolean @default(false)
+  discordWebhook   String?
+  telegram         Boolean @default(false)
+  telegramBotToken String?
+  telegramChatId   String?
+}
+
+model Settings {
+  id    Int     @id @default(autoincrement())
+  key   String  @unique
+  value String?
+}

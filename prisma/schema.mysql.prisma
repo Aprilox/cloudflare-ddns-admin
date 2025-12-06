@@ -1,0 +1,65 @@
+// Schema Prisma pour MySQL / MariaDB
+// Copiez ce fichier vers schema.prisma pour utiliser MySQL ou MariaDB
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model IpChangeLog {
+  id             Int      @id @default(autoincrement())
+  timestamp      DateTime @default(now())
+  oldIp          String   @db.VarChar(45)
+  newIp          String   @db.VarChar(45)
+  changeDuration Int
+}
+
+model ActionLog {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  action    String   @db.VarChar(255)
+  details   String   @db.Text
+}
+
+model DDNSConfig {
+  id                Int     @id @default(autoincrement())
+  cloudflareToken   String  @db.VarChar(255)
+  zoneId            String  @db.VarChar(255)
+  recordName        String  @db.VarChar(255)
+  ttl               Int
+  proxy             Boolean
+  checkInterval     Int
+  verificationCount Int     @default(3)
+  verificationDelay Int     @default(10)
+}
+
+model LogSettings {
+  id                      Int @id @default(autoincrement())
+  ipChangeLogRetention    Int
+  actionLogRetention      Int
+  statisticsDataRetention Int
+}
+
+model WorkerState {
+  id        Int     @id @default(1)
+  isRunning Boolean @default(false)
+}
+
+model NotificationSettings {
+  id               Int     @id @default(1)
+  discord          Boolean @default(false)
+  discordWebhook   String? @db.VarChar(512)
+  telegram         Boolean @default(false)
+  telegramBotToken String? @db.VarChar(255)
+  telegramChatId   String? @db.VarChar(255)
+}
+
+model Settings {
+  id    Int     @id @default(autoincrement())
+  key   String  @unique @db.VarChar(255)
+  value String? @db.Text
+}
