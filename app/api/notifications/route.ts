@@ -39,6 +39,7 @@ async function sendTelegramTestMessage(botToken: string, chatId: string): Promis
 }
 
 export async function POST(req: Request) {
+  try {
   const body = await req.json()
   const notifications = await prisma.notificationSettings.upsert({
     where: { id: 1 },
@@ -74,6 +75,10 @@ export async function POST(req: Request) {
     discordTestStatus,
     telegramTestStatus,
   })
+  } catch (error) {
+    console.error('Error saving notification settings:', error)
+    return NextResponse.json({ error: 'Erreur lors de la sauvegarde des notifications' }, { status: 500 })
+  }
 }
 
 export async function GET() {

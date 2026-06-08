@@ -46,10 +46,19 @@ export async function POST(req: Request) {
           deletedCount = result.count;
         }
         break;
-      case 'statistics':
-        const statsResult = await prisma.ipChangeLog.deleteMany({});
-        deletedCount = statsResult.count;
+      case 'statistics': {
+        if (deleteAll) {
+          const statsResult = await prisma.ipChangeLog.deleteMany({});
+          deletedCount = statsResult.count;
+        } else {
+          const statsRetentionDate = getRetentionDate(settings.statisticsDataRetention);
+          const statsResult = await prisma.ipChangeLog.deleteMany({
+            where: { timestamp: { lt: statsRetentionDate } }
+          });
+          deletedCount = statsResult.count;
+        }
         break;
+      }
       case 'all':
         const allIpChangeResult = await prisma.ipChangeLog.deleteMany({});
         const allActionLogResult = await prisma.actionLog.deleteMany({});
