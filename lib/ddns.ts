@@ -295,7 +295,15 @@ async function checkIP() {
       // Si première IP, enregistrer et notifier (test)
       if (!last) {
         await log('FIRST_IP_RECORDED', `Première IP enregistrée: ${r.consensusIp}`)
-        await prisma.ipChangeLog.create({ data: { oldIp: 'N/A', newIp: r.consensusIp, changeDuration: 0 } })
+        const start = Date.now()
+        const ok = await updateDNS(config, r.consensusIp)
+        const ms = Date.now() - start
+        if (ok) {
+          await log('DNS_UPDATE_SUCCESS', `N/A → ${r.consensusIp} (${ms}ms)`)
+        } else {
+          await log('DNS_UPDATE_FAILURE', `Échec init: ${r.consensusIp}`)
+        }
+        await prisma.ipChangeLog.create({ data: { oldIp: 'N/A', newIp: r.consensusIp, changeDuration: ms } })
         await notify('N/A', r.consensusIp, 0)
       } else {
         await log('IP_CHANGE_DETECTED', `${last.newIp} → ${r.consensusIp}`)
